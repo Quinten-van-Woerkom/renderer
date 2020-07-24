@@ -16,8 +16,6 @@ use winit::{
     window::{Window, WindowBuilder},
 };
 
-use wgpu::*;
-
 
 /**
  * Returns a logical graphical device that fits the given power preference
@@ -27,9 +25,9 @@ use wgpu::*;
  */
 async fn request_graphical_device(
     power_preference: wgpu::PowerPreference,
-    compatible_surface: Option<&Surface>
-) -> Option<(Device, Queue)> {
-    let adapter = Adapter::request(
+    compatible_surface: Option<&wgpu::Surface>
+) -> Option<(wgpu::Device, wgpu::Queue)> {
+    let adapter = wgpu::Adapter::request(
         &wgpu::RequestAdapterOptions {
             power_preference: power_preference,
             compatible_surface: compatible_surface,
@@ -53,9 +51,9 @@ async fn request_graphical_device(
  * Effectively a wrapper over the surface, swap chain, and screen dimensions.
  */
 struct Screen {
-    surface: Surface,
-    swap_chain: SwapChain,
-    swap_chain_descriptor: SwapChainDescriptor,
+    surface: wgpu::Surface,
+    swap_chain: wgpu::SwapChain,
+    swap_chain_descriptor: wgpu::SwapChainDescriptor,
 }
 
 impl Screen {
@@ -65,8 +63,8 @@ impl Screen {
      * The surface must be pre-created as the choice of graphical device
      * depends on it.
      */
-    fn new(device: &Device, surface: Surface, dimensions: PhysicalSize<u32>) -> Self {
-        let swap_chain_descriptor = SwapChainDescriptor {
+    fn new(device: &wgpu::Device, surface: wgpu::Surface, dimensions: PhysicalSize<u32>) -> Self {
+        let swap_chain_descriptor = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             width: dimensions.width,
@@ -88,7 +86,7 @@ impl Screen {
      * recreating the swap chain that is drawn to. This is necessary if the
      * window size is changed, for example.
      */
-    fn reconfigure(&mut self, device: &Device, dimensions: PhysicalSize<u32>) {
+    fn reconfigure(&mut self, device: &wgpu::Device, dimensions: PhysicalSize<u32>) {
         self.swap_chain_descriptor.width = dimensions.width;
         self.swap_chain_descriptor.height = dimensions.height;
         self.swap_chain = device.create_swap_chain(
@@ -100,7 +98,7 @@ impl Screen {
     /**
      * Returns the next available framebuffer in the swap chain to draw to.
      */
-    fn next_framebuffer(&mut self) -> SwapChainOutput {
+    fn next_framebuffer(&mut self) -> wgpu::SwapChainOutput {
         self.swap_chain.get_next_texture().expect("Time-out obtaining next framebuffer")
     }
 
@@ -132,50 +130,23 @@ impl Screen {
 }
 
 
-// /**
-//  * Representation of the computational graph of the rendering process.
-//  */
-// struct RenderProgram {
-//     pipeline: wgpu::RenderPipeline,
-//     bind_group_layouts: Vec<wgpu::BindGroupLayout>,
-//     uniform_buffer: wgpu::Buffer,
-//     depth_buffer: texture::Texture,
-// }
-
-// impl RenderProgram {
-//     fn new(vertex_shader: &str, fragment_shader: &str, ...)
-// }
-
-
 /**
- * Consumes and renders a mesh.
- * TODO: split up class responsibilities, it is humongous right now.
+ * Representation of the computational graph of the rendering process.
  */
-struct RenderingEngine {
-    device: Device,
-    queue: Queue,
-    screen: Screen,
-
+struct RenderProgram {
     pipeline: wgpu::RenderPipeline,
-    input_layout: wgpu::BindGroupLayout,
+    bind_group_layouts: Vec<wgpu::BindGroupLayout>,
     uniform_buffer: wgpu::Buffer,
     depth_buffer: texture::Texture,
-
-    model: Model,
 }
 
-impl RenderingEngine {
-    async fn new(window: &Window) -> Result<Self> {
-        let dimensions = window.inner_size();
-        let surface = Surface::create(window);
-
-        let (device, queue) = request_graphical_device(
-            wgpu::PowerPreference::HighPerformance,
-            Some(&surface),
-        ).await.unwrap();
-
-        let screen = Screen::new(&device, surface, dimensions);
-
+impl RenderProgram {
+    /**
+     * Constructs a new instance of the rendering pipeline.
+     * Although all state is stored at runtime per Vulkan requirements, no
+     * actual runtime configuration is possible at the moment.
+     */
+    fn new(device: &wgpu::Device, screen: &Screen) -> Self {
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: std::mem::size_of::<Uniforms>() as wgpu::BufferAddress,
@@ -228,7 +199,9 @@ impl RenderingEngine {
         });
 
         // TODO: this should probably be a Device method
-        let depth_buffer = texture::Texture::depth_buffer(&device, dimensions);
+        let depth_buffer = texture::Texture::depth_buffer(&device, screen.physical_dimensions());
+
+        let bind_group_layouts = vec![input_layout, diffuse_layout];
 
         let pipeline = {
             let mut shader_compiler = shaderc::Compiler::new().unwrap();
@@ -249,7 +222,7 @@ impl RenderingEngine {
 
             let pipeline_layout = device.create_pipeline_layout(
                 &wgpu::PipelineLayoutDescriptor {
-                    bind_group_layouts: &[&input_layout, &diffuse_layout]
+                    bind_group_layouts: &bind_group_layouts.iter().map(|b| b).collect::<Vec<_>>(),
             });
 
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -297,10 +270,52 @@ impl RenderingEngine {
             })
         };
 
+        Self {
+            pipeline,
+            uniform_buffer,
+            depth_buffer,
+            bind_group_layouts,
+        }
+    }
+
+    fn reconfigure(&mut self, device: &wgpu::Device, dimensions: PhysicalSize<u32>) {
+        self.depth_buffer = texture::Texture::depth_buffer(
+            device,
+            dimensions,
+        );
+    }
+}
+
+
+/**
+ * Consumes and renders a mesh.
+ * TODO: split up class responsibilities, it is humongous right now.
+ */
+struct RenderingEngine {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    screen: Screen,
+    program: RenderProgram,
+    model: Model,
+}
+
+impl RenderingEngine {
+    async fn new(window: &Window) -> Result<Self> {
+        let dimensions = window.inner_size();
+        let surface = wgpu::Surface::create(window);
+
+        let (device, queue) = request_graphical_device(
+            wgpu::PowerPreference::HighPerformance,
+            Some(&surface),
+        ).await.unwrap();
+
+        let screen = Screen::new(&device, surface, dimensions);
+        let program = RenderProgram::new(&device, &screen);
+ 
         // TODO: This should probably be a Device method
         let (mut model, command_load_model) = Model::load(
             &device,
-            &diffuse_layout,
+            &program.bind_group_layouts[1],
             "resources/cube.obj"
         )?;
         model.make_testing_grid(&device);
@@ -310,22 +325,14 @@ impl RenderingEngine {
             device,
             queue,
             screen,
-
-            pipeline,
-            input_layout,
-            uniform_buffer,
-            depth_buffer,
-
+            program,
             model,
         })
     }
 
     fn reconfigure_window(&mut self, dimensions: PhysicalSize<u32>) {
         self.screen.reconfigure(&self.device, dimensions);
-        self.depth_buffer = texture::Texture::depth_buffer(
-            &self.device,
-            self.screen.physical_dimensions()
-        );
+        self.program.reconfigure(&self.device, dimensions);
     }
 
     fn render(&mut self, camera: &camera::Camera) {
@@ -343,16 +350,16 @@ impl RenderingEngine {
             );
 
             encoder.copy_buffer_to_buffer(
-                &staging_buffer, 0, &self.uniform_buffer, 0,
+                &staging_buffer, 0, &self.program.uniform_buffer, 0,
                 std::mem::size_of::<Uniforms>() as wgpu::BufferAddress);
             
             let uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.input_layout,
+                layout: &self.program.bind_group_layouts[0],
                 bindings: &[
                     wgpu::Binding {
                         binding: 0,
                         resource: wgpu::BindingResource::Buffer {
-                            buffer: &self.uniform_buffer,
+                            buffer: &self.program.uniform_buffer,
                             range: 0..std::mem::size_of_val(&uniforms) as wgpu::BufferAddress,
                         }
                     },
@@ -379,7 +386,7 @@ impl RenderingEngine {
                     }
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: &self.depth_buffer.view,
+                    attachment: &self.program.depth_buffer.view,
                     depth_load_op: wgpu::LoadOp::Clear,
                     depth_store_op: wgpu::StoreOp::Store,
                     clear_depth: 1.0,
@@ -389,7 +396,7 @@ impl RenderingEngine {
                 }),
             });
 
-            render_pass.set_pipeline(&self.pipeline);
+            render_pass.set_pipeline(&self.program.pipeline);
             render_pass.draw_model(&self.model, &uniform_bind_group);
         }
         self.queue.submit(&[ encoder.finish() ]);
@@ -409,7 +416,10 @@ unsafe impl bytemuck::Zeroable for Uniforms {}
 
 fn main() {
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().with_title("Object renderer").build(&event_loop).expect("Unable to open window");
+    let window = WindowBuilder::new()
+        .with_title("Object renderer")
+        // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(event_loop.available_monitors().nth(1).unwrap())))
+        .build(&event_loop).expect("Unable to open window");
     let mut renderer = block_on(RenderingEngine::new(&window)).expect("Unable to construct rendering engine");
 
     let mut camera = camera::Camera::from_frustum(

@@ -1,7 +1,8 @@
 #version 450
 
 layout(location = 0) in vec3 a_position;
-layout(location = 1) in vec2 a_texture_coordinates;
+layout(location = 1) in vec3 a_normal; // Unused
+layout(location = 2) in vec2 a_texture_coordinates;
 
 layout(location = 0) out vec2 v_texture_coordinates;
 
