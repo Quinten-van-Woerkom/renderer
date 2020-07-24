@@ -368,7 +368,7 @@ impl RenderingEngine {
                         resource: wgpu::BindingResource::Buffer {
                             buffer: &self.model.instances,
                             range: 0..(self.model.instance_count as usize
-                                * std::mem::size_of::<cgmath::Matrix4<f32>>()) as wgpu::BufferAddress
+                                * std::mem::size_of::<nalgebra::Matrix4<f32>>()) as wgpu::BufferAddress
                         }
                     }
                 ],
@@ -407,7 +407,7 @@ impl RenderingEngine {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct Uniforms {
-    view_projection: cgmath::Matrix4<f32>,
+    view_projection: nalgebra::Matrix4<f32>,
 }
 
 unsafe impl bytemuck::Pod for Uniforms {}
@@ -423,11 +423,11 @@ fn main() {
     let mut renderer = block_on(RenderingEngine::new(&window)).expect("Unable to construct rendering engine");
 
     let mut camera = camera::Camera::from_frustum(
-        (0.0, 1.0, 2.0).into(),
-        (0.0, -1.0, -2.0).into(),
-        cgmath::Vector3::unit_y(),
+        nalgebra::Point3::new(0.0, 1.0, 2.0),
+        nalgebra::Unit::new_normalize(nalgebra::Vector3::new(0.0, -1.0, -2.0)),
+        nalgebra::Vector3::y_axis(),
         renderer.screen.aspect_ratio(),
-        cgmath::Deg(45.0).into(),
+        std::f32::consts::FRAC_PI_4,
         0.1,
         100.0,
     );

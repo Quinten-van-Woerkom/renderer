@@ -8,12 +8,45 @@ use crate::texture::*;
 use std::ops::Range;
 use std::vec::Vec;
 
+// /**
+//  * The graphical world is divided into regions that each store their own
+//  * contained set of models, lights, etc. and that can be rendered separately.
+//  * This could be used later to efficiently perform frustum culling etc.
+//  */
+// pub struct GraphicsRegion<'a> {
+//     pub device: &'a wgpu::Device,
+//     pub models: Vec<Model>,
+//     pub lights: Vec<wgpu::Buffer>,
+// }
+
+// impl<'a> GraphicsRegion<'a> {
+//     pub fn new(device: &'a wgpu::Device) -> Self {
+//         Self {
+//             device: device,
+//             models: Vec::new(),
+//             lights: Vec::new(),
+//         }
+//     }
+
+//     pub fn add_model(&mut self, model: Model) {
+//         self.models.push(model);
+//     }
+
+//     pub fn add_light(&mut self, light: Light) {
+//         let light_buffer = self.device.create_buffer_with_data(
+//             bytemuck::cast_slice(&[light]),
+//             wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+//         );
+
+//         self.lights.push(light_buffer);
+//     }
+// }
+
 /**
  * A 3D model is stored as a combination of meshes and textures.
  * Currently, no animation support (e.g. joints) is present.
  */
 pub struct Model {
-    // Consider small vector optimisation here?
     pub meshes: Vec<Mesh>,
     pub materials: Vec<Material>,
     pub instances: wgpu::Buffer,
@@ -110,17 +143,15 @@ impl Model {
         const SPACE_BETWEEN: f32 = 3.0;
         let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
             (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                use cgmath::{ InnerSpace, Zero, Rotation3 };
-
                 let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
                 let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
 
-                let position = cgmath::Vector3 { x, y: 0.0, z };
-
-                let rotation = if position.is_zero() {
-                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                let position = nalgebra::Vector3::new(x, 0.0, z);
+                
+                let rotation = if position == nalgebra::Vector3::zeros() {
+                    nalgebra::Rotation3::from_axis_angle(&nalgebra::Vector3::z_axis(), 0.0)
                 } else {
-                    cgmath::Quaternion::from_axis_angle(position.clone().normalize(), cgmath::Deg(45.0))
+                    nalgebra::Rotation3::from_axis_angle(&nalgebra::Unit::new_normalize(position), std::f32::consts::PI/4.0)
                 };
 
                 Instance::new(position, rotation)
@@ -188,25 +219,23 @@ impl<'a, 'b> DrawModel<'a, 'b> for wgpu::RenderPass<'a> where 'b: 'a {
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct Instance {
-    model: cgmath::Matrix4<f32>,
+    model: nalgebra::Matrix4<f32>,
 }
 
 impl Instance {
-    fn new(position: cgmath::Vector3<f32>, rotation: cgmath::Quaternion<f32>) -> Instance {
+    fn new(position: nalgebra::Vector3<f32>, rotation: nalgebra::Rotation3<f32>) -> Instance {
         Instance {
-            model: cgmath::Matrix4::from_translation(position)
-            * cgmath::Matrix4::from(rotation)
+            model: nalgebra::Isometry3::from_parts(position.into(), rotation.into()).to_homogeneous()
         }
     }
 }
 
 impl Default for Instance {
     fn default() -> Self {
-        use cgmath::{ Rotation3, Zero };
-        let position = cgmath::Vector3::zero();
-        let rotation = cgmath::Quaternion::from_axis_angle(
-            cgmath::Vector3::new(1.0, 0.0, 0.0), cgmath::Rad(0.0));
-        Self::new(position, rotation)
+        let position = nalgebra::Vector3::zeros();
+        let rotation = nalgebra::Rotation3::from_axis_angle(
+            &nalgebra::Vector3::x_axis(), 0.0);
+        Self::new(position.into(), rotation.into())
     }
 }
 
@@ -230,8 +259,8 @@ pub trait Vertex: bytemuck::Pod + bytemuck::Zeroable {
 #[derive(Copy, Clone, Debug)]
 pub struct ModelVertex {
     position: [f32; 3],
+    normal: [f32; 3],
     texture_coordinates: [f32; 2],
-    normal: [f32; 3]
 }
 
 unsafe impl bytemuck::Pod for ModelVertex {}
@@ -251,14 +280,39 @@ impl Vertex for ModelVertex {
                 wgpu::VertexAttributeDescriptor {
                     offset: std::mem::size_of::<[f32; 3]>() as wgpu::BufferAddress,
                     shader_location: 1,
-                    format: wgpu::VertexFormat::Float2,
+                    format: wgpu::VertexFormat::Float3,
                 },
                 wgpu::VertexAttributeDescriptor {
-                    offset: std::mem::size_of::<[f32; 5]>() as wgpu::BufferAddress,
+                    offset: std::mem::size_of::<[f32; 6]>() as wgpu::BufferAddress,
                     shader_location: 2,
-                    format: wgpu::VertexFormat::Float3,
+                    format: wgpu::VertexFormat::Float2,
                 },
             ]
         }
     }
 }
+
+
+// /**
+//  * Lights are stored in terms of their position and colour only, for now.
+//  */
+// #[repr(C)]
+// #[derive(Copy, Clone, Debug)]
+// pub struct Light {
+//     position: nalgebra::Vector3<f32>,
+//     _padding: u32,
+//     color: nalgebra::Vector3<f32>,
+// }
+
+// impl Light {
+//     fn new(position: nalgebra::Vector3<f32>, color: nalgebra::Vector3<f32>) -> Self {
+//         Self {
+//             position,
+//             color,
+//             _padding: 0,
+//         }
+//     }
+// }
+
+// unsafe impl bytemuck::Zeroable for Light {}
+// unsafe impl bytemuck::Pod for Light {}
