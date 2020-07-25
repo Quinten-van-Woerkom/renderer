@@ -296,7 +296,6 @@ struct RenderingEngine {
     queue: wgpu::Queue,
     screen: Screen,
     program: RenderProgram,
-    model: Model,
 }
 
 impl RenderingEngine {
@@ -311,22 +310,12 @@ impl RenderingEngine {
 
         let screen = Screen::new(&device, surface, dimensions);
         let program = RenderProgram::new(&device, &screen);
- 
-        // TODO: This should probably be a Device method
-        let (mut model, command_load_model) = Model::load(
-            &device,
-            &program.bind_group_layouts[1],
-            "resources/cube.obj"
-        )?;
-        model.make_testing_grid(&device);
-        queue.submit(&command_load_model);
 
         Ok(Self {
             device,
             queue,
             screen,
             program,
-            model,
         })
     }
 
@@ -335,7 +324,18 @@ impl RenderingEngine {
         self.program.reconfigure(&self.device, dimensions);
     }
 
-    fn render(&mut self, camera: &camera::Camera) {
+    /**
+     * Renders the world model from the point of view of the given camera.
+     * TODO: Move the world model data out of the rendering engine, it is
+     * semantically distinct.
+     * TODO: Currently, all bind groups are reconstructed on every render call,
+     * while this is only really necessary when the corresponding bind group is
+     * changed. It might be useful to move this bind group construction
+     * elsewhere.
+     * TODO: The code currently assumes that there is only one model inside
+     * this graphics region.
+     */
+    fn render(&mut self, camera: &camera::Camera, graphics_region: &model::GraphicsRegion) {
         let uniforms = Uniforms{ view_projection: camera.projection_matrix() };
         let frame = self.screen.next_framebuffer();
 
@@ -344,6 +344,7 @@ impl RenderingEngine {
         );
 
         {
+            // Copies the new view projection data to the GPU
             let staging_buffer = self.device.create_buffer_with_data(
                 bytemuck::cast_slice(&[uniforms]),
                 wgpu::BufferUsage::COPY_SRC,
@@ -353,6 +354,7 @@ impl RenderingEngine {
                 &staging_buffer, 0, &self.program.uniform_buffer, 0,
                 std::mem::size_of::<Uniforms>() as wgpu::BufferAddress);
             
+            // Creates a bind group for all uniform data
             let uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: &self.program.bind_group_layouts[0],
                 bindings: &[
@@ -366,8 +368,8 @@ impl RenderingEngine {
                     wgpu::Binding {
                         binding: 1,
                         resource: wgpu::BindingResource::Buffer {
-                            buffer: &self.model.instances,
-                            range: 0..(self.model.instance_count as usize
+                            buffer: &graphics_region.models[0].instances,
+                            range: 0..(graphics_region.models[0].instance_count as usize
                                 * std::mem::size_of::<nalgebra::Matrix4<f32>>()) as wgpu::BufferAddress
                         }
                     }
@@ -375,6 +377,8 @@ impl RenderingEngine {
                 label: None
             });
 
+            // Constructs a render pass command that fits the current pipeline
+            // and model data.
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[
                     wgpu::RenderPassColorAttachmentDescriptor {
@@ -397,7 +401,7 @@ impl RenderingEngine {
             });
 
             render_pass.set_pipeline(&self.program.pipeline);
-            render_pass.draw_model(&self.model, &uniform_bind_group);
+            render_pass.draw_model(&graphics_region.models[0], &uniform_bind_group);
         }
         self.queue.submit(&[ encoder.finish() ]);
     }
@@ -423,14 +427,26 @@ fn main() {
     let mut renderer = block_on(RenderingEngine::new(&window)).expect("Unable to construct rendering engine");
 
     let mut camera = camera::Camera::from_frustum(
-        nalgebra::Point3::new(0.0, 1.0, 2.0),
-        nalgebra::Unit::new_normalize(nalgebra::Vector3::new(0.0, -1.0, -2.0)),
+        [0.0, 1.0, 2.0].into(),
+        nalgebra::Unit::new_normalize([0.0, -1.0, -2.0].into()),
         nalgebra::Vector3::y_axis(),
         renderer.screen.aspect_ratio(),
         std::f32::consts::FRAC_PI_4,
         0.1,
         100.0,
     );
+
+    let mut graphics_region = model::GraphicsRegion::new();
+
+    // TODO: This should probably be a Device method
+    let (mut model, command_load_model) = model::Model::load(
+        &renderer.device,
+        &renderer.program.bind_group_layouts[1],
+        "resources/cube.obj"
+    ).unwrap();
+    model.make_testing_grid(&renderer.device);
+    renderer.queue.submit(&command_load_model);
+    graphics_region.add_model(model);
 
     let mut keyboard = keyboard::Keyboard::new();
 
@@ -471,7 +487,7 @@ fn main() {
                 frame += 1;
 
                 camera.update(&keyboard, time_step);
-                renderer.render(&camera);
+                renderer.render(&camera, &graphics_region);
             }
             _ => ()
         }

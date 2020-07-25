@@ -8,39 +8,37 @@ use crate::texture::*;
 use std::ops::Range;
 use std::vec::Vec;
 
-// /**
-//  * The graphical world is divided into regions that each store their own
-//  * contained set of models, lights, etc. and that can be rendered separately.
-//  * This could be used later to efficiently perform frustum culling etc.
-//  */
-// pub struct GraphicsRegion<'a> {
-//     pub device: &'a wgpu::Device,
-//     pub models: Vec<Model>,
-//     pub lights: Vec<wgpu::Buffer>,
-// }
+/**
+ * The graphical world is divided into regions that each store their own
+ * contained set of models, lights, etc. and that can be rendered separately.
+ * This could be used later to efficiently perform frustum culling etc.
+ */
+pub struct GraphicsRegion {
+    pub models: Vec<Model>,
+    pub lights: Vec<wgpu::Buffer>,
+}
 
-// impl<'a> GraphicsRegion<'a> {
-//     pub fn new(device: &'a wgpu::Device) -> Self {
-//         Self {
-//             device: device,
-//             models: Vec::new(),
-//             lights: Vec::new(),
-//         }
-//     }
+impl<'a> GraphicsRegion {
+    pub fn new() -> Self {
+        Self {
+            models: Vec::new(),
+            lights: Vec::new(),
+        }
+    }
 
-//     pub fn add_model(&mut self, model: Model) {
-//         self.models.push(model);
-//     }
+    pub fn add_model(&mut self, model: Model) {
+        self.models.push(model);
+    }
 
-//     pub fn add_light(&mut self, light: Light) {
-//         let light_buffer = self.device.create_buffer_with_data(
-//             bytemuck::cast_slice(&[light]),
-//             wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-//         );
+    pub fn add_light(&mut self, light: PointLight, device: &wgpu::Device) {
+        let light_buffer = device.create_buffer_with_data(
+            bytemuck::cast_slice(&[light]),
+            wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        );
 
-//         self.lights.push(light_buffer);
-//     }
-// }
+        self.lights.push(light_buffer);
+    }
+}
 
 /**
  * A 3D model is stored as a combination of meshes and textures.
@@ -293,26 +291,27 @@ impl Vertex for ModelVertex {
 }
 
 
-// /**
-//  * Lights are stored in terms of their position and colour only, for now.
-//  */
-// #[repr(C)]
-// #[derive(Copy, Clone, Debug)]
-// pub struct Light {
-//     position: nalgebra::Vector3<f32>,
-//     _padding: u32,
-//     color: nalgebra::Vector3<f32>,
-// }
+/**
+ * Lights are stored in terms of their position and colour only, for now.
+ * As such, only point lights are supported.
+ */
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct PointLight {
+    position: nalgebra::Vector3<f32>,
+    _padding: u32,
+    color: nalgebra::Vector3<f32>,
+}
 
-// impl Light {
-//     fn new(position: nalgebra::Vector3<f32>, color: nalgebra::Vector3<f32>) -> Self {
-//         Self {
-//             position,
-//             color,
-//             _padding: 0,
-//         }
-//     }
-// }
+impl PointLight {
+    fn new(position: nalgebra::Vector3<f32>, color: nalgebra::Vector3<f32>) -> Self {
+        Self {
+            position,
+            color,
+            _padding: 0,
+        }
+    }
+}
 
-// unsafe impl bytemuck::Zeroable for Light {}
-// unsafe impl bytemuck::Pod for Light {}
+unsafe impl bytemuck::Zeroable for PointLight {}
+unsafe impl bytemuck::Pod for PointLight {}
